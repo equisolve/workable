@@ -32,6 +32,11 @@ module Workable
       @subdomain = options.fetch(:subdomain) { configuration_error 'Missing subdomain argument' }
       @transform_to   = Transformation.new(options[:transform_to])
       @transform_from = Transformation.new(options[:transform_from])
+      @debug = options[:debug]
+    end
+
+    def debug(message)
+      puts message if @debug
     end
 
     # return information about your account
@@ -106,15 +111,24 @@ module Workable
     # @option params :created_after [Timestamp|Integer] Returns results created after the specified timestamp.
     # @option params :updated_after [Timestamp|Integer] Returns results updated after the specified timestamp.
     def job_candidates(shortcode, params = {})
-      build_collection("jobs/#{shortcode}/candidates", :candidate, 'candidates', params)
+      params[:job] = shortcode
+      build_collection("candidates", :candidate, 'candidates', params)
     end
 
     # return the full object of a specific candidate
     # @param shortcode [String] job shortcode to select candidate from
     # @param id [String] candidates's id
-    def job_candidate(shortcode, id)
-      @transform_to.apply(:candidate, get_request("jobs/#{shortcode}/candidates/#{id}")['candidate'])
+    def job_candidate(shortcode, id, params = {})
+      @transform_to.apply(:candidate, get_request("candidates/#{id}")['candidate'])
     end
+
+    # return the full object of a specific candidate
+    # @param shortcode [String] job shortcode to select candidate from
+    # @param id [String] candidates's id
+    def candidate(id, params = {})
+      @transform_to.apply(:candidate, get_request("candidates/#{id}")['candidate'])
+    end
+
 
     # create new candidate for given job
     # @param candidate  [Hash] the candidate data as described in
@@ -124,10 +138,11 @@ module Workable
     # @param stage_slug [String] optional stage slug
     # @return [Hash] the candidate information without `{"candidate"=>{}}` part
     def create_job_candidate(candidate, shortcode, stage_slug = nil)
-      shortcode = "#{shortcode}/#{stage_slug}" if stage_slug
-
-      response = post_request("jobs/#{shortcode}/candidates") do |request|
+      params = {}
+      params[:stage] = stage_slug if stage_slug
+      response = post_request("jobs/#{shortcode}/candidates", params) do |request|
         request.body = @transform_from.apply(:candidate, candidate).to_json
+        debug "request.body: #{request.body}"
       end
 
       @transform_to.apply(:candidate, response['candidate'])
@@ -239,7 +254,7 @@ module Workable
 
     # build the url to api
     def api_url
-      @_api_url ||= 'https://www.workable.com/spi/v%s/accounts/%s' % [Workable::API_VERSION, subdomain]
+      @_api_url ||= 'https://%s.workable.com/spi/v%s' % [subdomain, Workable::API_VERSION]
     end
 
     # do the get request to api
@@ -250,8 +265,10 @@ module Workable
     end
 
     # do the post request to api
-    def post_request(url)
-      do_request(url, Net::HTTP::Post) do |request|
+    def post_request(url, params = {})
+      params = URI.encode_www_form(params.keep_if { |k, v| k && v })
+      full_url = params.empty? ? url : [url, params].join('?')
+      do_request(full_url, Net::HTTP::Post) do |request|
         yield(request) if block_given?
       end
     end
@@ -259,6 +276,8 @@ module Workable
     # generic part of requesting api
     def do_request(url, type, &_block)
       uri = URI.parse("#{api_url}/#{url}")
+      debug "#{type} #{uri}"
+
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = true
 
@@ -267,7 +286,8 @@ module Workable
       yield request if block_given?
 
       response = http.request(request)
-
+      debug response.inspect
+      debug response.body
       parse!(response)
     end
 
